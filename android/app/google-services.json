@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "964078074876",
+    "project_id": "guardianshield-e625e",
+    "storage_bucket": "guardianshield-e625e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:964078074876:android:570c25d91d55f5a16c5079",
+        "android_client_info": {
+          "package_name": "com.guardianshield.agent"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyABxgkz8oDkk2EtdGZL34e27zYqGK2eUE0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
