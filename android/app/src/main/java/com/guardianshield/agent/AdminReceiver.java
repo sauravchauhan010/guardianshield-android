@@ -15,10 +15,11 @@ public class AdminReceiver extends DeviceAdminReceiver {
     private static final String TAG = "AdminReceiver";
 
     @Override
-    public void onDisableRequested(Context context, Intent intent) {
+    public CharSequence onDisableRequested(Context context, Intent intent) {
         // Someone is trying to disable Device Admin - send tamper alert!
         sendTamperAlert(context, "DISABLE_REQUESTED");
         Log.w(TAG, "Device admin disable requested!");
+        return "⚠ GuardianShield protection will be removed. Your guardian will be notified.";
     }
 
     @Override
