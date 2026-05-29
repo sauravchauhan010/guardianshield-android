@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">System Service</string>
     <string name="admin_description">Required to prevent unauthorized removal of GuardianShield protection.</string>
+    <string name="accessibility_description">GuardianShield monitors app usage to enforce scheduled access rules.</string>
 </resources>
