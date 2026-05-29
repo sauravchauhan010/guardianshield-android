@@ -1,21 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Permissions -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" tools:ignore="ProtectedPermissions"
-        xmlns:tools="http://schemas.android.com/tools"/>
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions"/>
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
-        tools:ignore="QueryAllPackagesPermission"
-        xmlns:tools="http://schemas.android.com/tools"/>
+        tools:ignore="QueryAllPackagesPermission"/>
     <uses-permission android:name="android.permission.BIND_DEVICE_ADMIN"
-        tools:ignore="ProtectedPermissions"
-        xmlns:tools="http://schemas.android.com/tools"/>
+        tools:ignore="ProtectedPermissions"/>
+    <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE"
+        tools:ignore="ProtectedPermissions"/>
 
     <application
         android:allowBackup="false"
@@ -24,7 +23,7 @@
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true">
 
-        <!-- Main Activity (hidden launcher - looks like system app) -->
+        <!-- Main entry point -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -36,24 +35,23 @@
             </intent-filter>
         </activity>
 
-        <!-- Setup Activity (shown once on first launch) -->
+        <!-- Setup screen -->
         <activity
             android:name=".SetupActivity"
             android:exported="false"
-            android:label="Setup"
+            android:label="GuardianShield Setup"
             android:theme="@style/AppTheme" />
 
-        <!-- Block Overlay Activity -->
+        <!-- Block overlay screen -->
         <activity
             android:name=".BlockActivity"
             android:exported="false"
             android:theme="@style/AppTheme.Fullscreen"
-            android:showOnLockScreen="true"
             android:taskAffinity=""
             android:excludeFromRecents="true"
             android:launchMode="singleInstance" />
 
-        <!-- Foreground Service -->
+        <!-- OLD background service (kept as fallback) -->
         <service
             android:name=".GuardService"
             android:exported="false"
@@ -61,6 +59,20 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="monitoringApps"/>
+        </service>
+
+        <!-- NEW Accessibility Service (cannot be killed by OS) -->
+        <service
+            android:name=".GuardAccessibilityService"
+            android:exported="true"
+            android:label="GuardianShield"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service" />
         </service>
 
         <!-- Boot receiver -->
@@ -74,7 +86,7 @@
             </intent-filter>
         </receiver>
 
-        <!-- Device Admin Receiver -->
+        <!-- Device Admin -->
         <receiver
             android:name=".AdminReceiver"
             android:exported="true"
