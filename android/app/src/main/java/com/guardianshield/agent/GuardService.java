@@ -15,11 +15,9 @@ import android.util.Log;
 
 import androidx.core.app.NotificationCompat;
 
-import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.ListenerRegistration;
 
-import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.HashMap;
 import java.util.List;
@@ -31,17 +29,19 @@ public class GuardService extends Service {
 
     private static final String TAG = "GuardService";
     private static final String CHANNEL_ID = "gs_service";
-    private static final int CHECK_INTERVAL_MS = 3000; // Check every 3 seconds
+    private static final int CHECK_INTERVAL_MS = 3000;
 
     private Handler handler;
     private Runnable checkRunnable;
     private FirebaseFirestore db;
     private ListenerRegistration rulesListener;
+    private ListenerRegistration appsListener;
 
-    // Current rules from Firebase: packageName -> schedule info
+    // rules: appId -> schedule map
     private Map<String, Object> currentRules = new HashMap<>();
+    // packageName -> appId  (built from installed_apps list)
+    private Map<String, String> packageToAppId = new HashMap<>();
 
-    // Days mapping
     private static final String[] DAY_NAMES = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
     @Override
@@ -52,23 +52,50 @@ public class GuardService extends Service {
         createNotificationChannel();
         startForeground(1, buildNotification());
         listenToFirebaseRules();
+        listenToInstalledApps();
         startMonitoring();
         Log.d(TAG, "GuardService started");
     }
 
-    // ── Listen to Firebase rules in real-time ────────────────────
+    // ── Listen to rules ──────────────────────────────────────────
     private void listenToFirebaseRules() {
         rulesListener = db.collection("guardianshield").document("rules")
                 .addSnapshotListener((snap, e) -> {
-                    if (e != null) { Log.e(TAG, "Rules listen failed", e); return; }
+                    if (e != null) { Log.e(TAG, "Rules error", e); return; }
                     if (snap != null && snap.exists()) {
                         currentRules = snap.getData() != null ? snap.getData() : new HashMap<>();
-                        Log.d(TAG, "Rules updated: " + currentRules.size() + " apps");
+                        Log.d(TAG, "Rules updated: " + currentRules.size() + " entries");
                     }
                 });
     }
 
-    // ── Start the monitoring loop ────────────────────────────────
+    // ── Listen to installed apps to build package->appId map ─────
+    @SuppressWarnings("unchecked")
+    private void listenToInstalledApps() {
+        appsListener = db.collection("guardianshield").document("installed_apps")
+                .addSnapshotListener((snap, e) -> {
+                    if (e != null) { Log.e(TAG, "Apps error", e); return; }
+                    if (snap != null && snap.exists()) {
+                        Map<String, Object> data = snap.getData();
+                        if (data == null) return;
+                        List<Map<String, Object>> list =
+                                (List<Map<String, Object>>) data.get("list");
+                        if (list == null) return;
+                        Map<String, String> newMap = new HashMap<>();
+                        for (Map<String, Object> app : list) {
+                            String pkg = (String) app.get("packageName");
+                            String id  = (String) app.get("id");
+                            if (pkg != null && id != null) {
+                                newMap.put(pkg, id);
+                            }
+                        }
+                        packageToAppId = newMap;
+                        Log.d(TAG, "Package map updated: " + packageToAppId.size() + " apps");
+                    }
+                });
+    }
+
+    // ── Monitoring loop ──────────────────────────────────────────
     private void startMonitoring() {
         checkRunnable = new Runnable() {
             @Override
@@ -80,46 +107,40 @@ public class GuardService extends Service {
         handler.post(checkRunnable);
     }
 
-    // ── Check what app is in foreground ──────────────────────────
+    // ── Core check ───────────────────────────────────────────────
     private void checkForegroundApp() {
         String foregroundPkg = getForegroundApp();
         if (foregroundPkg == null || foregroundPkg.equals(getPackageName())) return;
 
-        // Check each rule
-        for (Map.Entry<String, Object> entry : currentRules.entrySet()) {
-            String appId = entry.getKey();
-            Object ruleObj = entry.getValue();
-            if (!(ruleObj instanceof Map)) continue;
+        // Get the appId for this package
+        String appId = packageToAppId.get(foregroundPkg);
+        if (appId == null) return; // Not in our app list
 
-            @SuppressWarnings("unchecked")
-            Map<String, Object> rule = (Map<String, Object>) ruleObj;
+        // Check if there's a rule for this appId
+        Object ruleObj = currentRules.get(appId);
+        if (!(ruleObj instanceof Map)) return;
 
-            Boolean enabled = (Boolean) rule.get("enabled");
-            if (enabled == null || !enabled) continue;
+        @SuppressWarnings("unchecked")
+        Map<String, Object> rule = (Map<String, Object>) ruleObj;
 
-            // Get package name for this app
-            String packageName = AppScanner.getPackageForAppId(appId);
-            if (packageName == null || !foregroundPkg.equals(packageName)) continue;
+        Boolean enabled = (Boolean) rule.get("enabled");
+        if (enabled == null || !enabled) return;
 
-            // Check if current time is within allowed slots
-            if (!isAllowedNow(rule)) {
-                // BLOCK IT
-                blockApp(foregroundPkg, appId);
-                return;
-            }
+        // Check if current time is allowed
+        if (!isAllowedNow(rule)) {
+            Log.d(TAG, "BLOCKING: " + foregroundPkg + " (appId: " + appId + ")");
+            blockApp(foregroundPkg, appId);
         }
     }
 
-    // ── Check if now is within allowed time/day ───────────────────
+    // ── Time/day check ───────────────────────────────────────────
     @SuppressWarnings("unchecked")
     private boolean isAllowedNow(Map<String, Object> rule) {
         Calendar cal = Calendar.getInstance();
-        int dayOfWeek = cal.get(Calendar.DAY_OF_WEEK); // 1=Sun, 7=Sat
+        int dayOfWeek = cal.get(Calendar.DAY_OF_WEEK); // 1=Sun
         String todayName = DAY_NAMES[dayOfWeek - 1];
 
-        int currentHour = cal.get(Calendar.HOUR_OF_DAY);
-        int currentMin  = cal.get(Calendar.MINUTE);
-        int currentMins = currentHour * 60 + currentMin;
+        int currentMins = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE);
 
         // Check allowed days
         List<String> days = (List<String>) rule.get("days");
@@ -130,23 +151,19 @@ public class GuardService extends Service {
         if (slots == null || slots.isEmpty()) return false;
 
         for (Map<String, Object> slot : slots) {
-            String from = (String) slot.get("from"); // "16:00"
-            String to   = (String) slot.get("to");   // "18:00"
+            String from = (String) slot.get("from");
+            String to   = (String) slot.get("to");
             if (from == null || to == null) continue;
-
-            int fromMins = timeToMins(from);
-            int toMins   = timeToMins(to);
-
-            if (currentMins >= fromMins && currentMins < toMins) {
-                return true; // Within an allowed slot
+            if (currentMins >= timeToMins(from) && currentMins < timeToMins(to)) {
+                return true;
             }
         }
         return false;
     }
 
-    private int timeToMins(String time) {
-        String[] parts = time.split(":");
-        return Integer.parseInt(parts[0]) * 60 + Integer.parseInt(parts[1]);
+    private int timeToMins(String t) {
+        String[] p = t.split(":");
+        return Integer.parseInt(p[0]) * 60 + Integer.parseInt(p[1]);
     }
 
     // ── Show block screen ────────────────────────────────────────
@@ -160,10 +177,11 @@ public class GuardService extends Service {
         startActivity(intent);
     }
 
-    // ── Get foreground app using UsageStats ──────────────────────
+    // ── Get foreground app ───────────────────────────────────────
     private String getForegroundApp() {
         try {
-            UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
+            UsageStatsManager usm = (UsageStatsManager)
+                    getSystemService(Context.USAGE_STATS_SERVICE);
             long now = System.currentTimeMillis();
             SortedMap<Long, UsageStats> sortedMap = new TreeMap<>();
             List<UsageStats> stats = usm.queryUsageStats(
@@ -181,11 +199,10 @@ public class GuardService extends Service {
         return null;
     }
 
-    // ── Notification (required for foreground service) ────────────
+    // ── Notification ─────────────────────────────────────────────
     private void createNotificationChannel() {
         NotificationChannel ch = new NotificationChannel(
                 CHANNEL_ID, "Guardian Shield", NotificationManager.IMPORTANCE_LOW);
-        ch.setDescription("Monitoring app usage");
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm != null) nm.createNotificationChannel(ch);
     }
@@ -202,7 +219,7 @@ public class GuardService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        return START_STICKY; // Restart automatically if killed
+        return START_STICKY;
     }
 
     @Override
@@ -210,8 +227,8 @@ public class GuardService extends Service {
         super.onDestroy();
         if (handler != null && checkRunnable != null) handler.removeCallbacks(checkRunnable);
         if (rulesListener != null) rulesListener.remove();
-        // Restart self
-        startService(new Intent(this, GuardService.class));
+        if (appsListener  != null) appsListener.remove();
+        startService(new Intent(this, GuardService.class)); // restart self
     }
 
     @Override
