@@ -1,163 +1,178 @@
 package com.guardianshield.agent;
 
-import android.app.Activity;
-import android.app.admin.DevicePolicyManager;
-import android.content.ComponentName;
+import android.accessibilityservice.AccessibilityService;
+import android.accessibilityservice.AccessibilityServiceInfo;
 import android.content.Intent;
-import android.net.Uri;
-import android.os.Bundle;
-import android.provider.Settings;
-import android.view.Gravity;
-import android.view.View;
-import android.widget.Button;
-import android.widget.LinearLayout;
-import android.widget.ScrollView;
-import android.widget.TextView;
-import android.graphics.Color;
-import android.graphics.Typeface;
+import android.util.Log;
+import android.view.accessibility.AccessibilityEvent;
 
-public class SetupActivity extends Activity {
+import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.firestore.ListenerRegistration;
 
-    private static final int REQ_DEVICE_ADMIN = 101;
+import java.util.Calendar;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
-    private TextView tvStatus;
-    private Button btnOverlay, btnUsage, btnAdmin, btnFinish;
+public class GuardAccessibilityService extends AccessibilityService {
 
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        buildUI();
-    }
+    private static final String TAG = "GuardAccess";
 
-    private void buildUI() {
-        ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(Color.parseColor("#0f0c29"));
+    private FirebaseFirestore db;
+    private ListenerRegistration rulesListener;
+    private ListenerRegistration appsListener;
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(60, 80, 60, 60);
-        root.setGravity(Gravity.CENTER_HORIZONTAL);
+    private Map<String, Object> currentRules  = new HashMap<>();
+    private Map<String, String> packageToAppId = new HashMap<>();
 
-        // Title
-        TextView title = new TextView(this);
-        title.setText("🛡️ GuardianShield");
-        title.setTextSize(28);
-        title.setTextColor(Color.WHITE);
-        title.setTypeface(null, Typeface.BOLD);
-        title.setGravity(Gravity.CENTER);
-        root.addView(title);
-
-        // Subtitle
-        TextView sub = new TextView(this);
-        sub.setText("Setup required — grant permissions below");
-        sub.setTextSize(14);
-        sub.setTextColor(Color.parseColor("#aaaacc"));
-        sub.setGravity(Gravity.CENTER);
-        sub.setPadding(0, 16, 0, 48);
-        root.addView(sub);
-
-        // Step 1 - Overlay
-        root.addView(makeStepLabel("Step 1 of 3 — Display Over Other Apps"));
-        btnOverlay = makeButton("Grant Overlay Permission", "#7C3AED");
-        btnOverlay.setOnClickListener(v -> {
-            Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:" + getPackageName()));
-            startActivity(i);
-        });
-        root.addView(btnOverlay);
-
-        // Step 2 - Usage Stats
-        root.addView(makeStepLabel("Step 2 of 3 — Usage Access"));
-        btnUsage = makeButton("Grant Usage Access", "#7C3AED");
-        btnUsage.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)));
-        root.addView(btnUsage);
-
-        // Step 3 - Device Admin
-        root.addView(makeStepLabel("Step 3 of 3 — Device Administrator"));
-        btnAdmin = makeButton("Activate Device Admin", "#7C3AED");
-        btnAdmin.setOnClickListener(v -> {
-            ComponentName comp = new ComponentName(this, AdminReceiver.class);
-            Intent i = new Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
-            i.putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, comp);
-            i.putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-                    "Required to prevent unauthorized uninstallation of GuardianShield.");
-            startActivityForResult(i, REQ_DEVICE_ADMIN);
-        });
-        root.addView(btnAdmin);
-
-        // Status
-        tvStatus = new TextView(this);
-        tvStatus.setText("");
-        tvStatus.setTextColor(Color.parseColor("#4ade80"));
-        tvStatus.setTextSize(13);
-        tvStatus.setGravity(Gravity.CENTER);
-        tvStatus.setPadding(0, 24, 0, 0);
-        root.addView(tvStatus);
-
-        // Finish button
-        btnFinish = makeButton("✓ All Done — Start Protection", "#22c55e");
-        btnFinish.setPadding(0, 0, 0, 0);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 140);
-        lp.topMargin = 40;
-        btnFinish.setLayoutParams(lp);
-        btnFinish.setOnClickListener(v -> finishSetup());
-        root.addView(btnFinish);
-
-        scroll.addView(root);
-        setContentView(scroll);
-    }
-
-    private void finishSetup() {
-        // Mark setup done
-        getSharedPreferences("gs_prefs", MODE_PRIVATE)
-                .edit().putBoolean("setup_done", true).apply();
-
-        // Upload installed apps to Firebase
-        AppScanner.uploadInstalledApps(this);
-
-        // Start guard service
-        startService(new Intent(this, GuardService.class));
-
-        tvStatus.setText("✓ GuardianShield is now active!");
-        btnFinish.postDelayed(this::finish, 1500);
-    }
-
-    private TextView makeStepLabel(String text) {
-        TextView tv = new TextView(this);
-        tv.setText(text);
-        tv.setTextColor(Color.parseColor("#a78bfa"));
-        tv.setTextSize(13);
-        tv.setTypeface(null, Typeface.BOLD);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = 32;
-        lp.bottomMargin = 8;
-        tv.setLayoutParams(lp);
-        return tv;
-    }
-
-    private Button makeButton(String text, String hexColor) {
-        Button btn = new Button(this);
-        btn.setText(text);
-        btn.setTextColor(Color.WHITE);
-        btn.setTextSize(15);
-        btn.setTypeface(null, Typeface.BOLD);
-        btn.setBackgroundColor(Color.parseColor(hexColor));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 130);
-        lp.topMargin = 8;
-        btn.setLayoutParams(lp);
-        return btn;
-    }
+    private static final String[] DAY_NAMES = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
 
     @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        if (requestCode == REQ_DEVICE_ADMIN) {
-            if (resultCode == RESULT_OK) {
-                tvStatus.setText("✓ Device Admin activated!");
+    public void onServiceConnected() {
+        super.onServiceConnected();
+        Log.d(TAG, "✅ AccessibilityService connected!");
+
+        // Configure to receive window state changes
+        AccessibilityServiceInfo info = new AccessibilityServiceInfo();
+        info.eventTypes  = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED;
+        info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC;
+        info.flags       = AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS;
+        info.notificationTimeout = 100;
+        setServiceInfo(info);
+
+        db = FirebaseFirestore.getInstance();
+        listenToRules();
+        listenToInstalledApps();
+    }
+
+    // ── Firebase rules listener ──────────────────────────────────
+    private void listenToRules() {
+        rulesListener = db.collection("guardianshield").document("rules")
+                .addSnapshotListener((snap, e) -> {
+                    if (e != null) return;
+                    if (snap != null && snap.exists()) {
+                        currentRules = snap.getData() != null ? snap.getData() : new HashMap<>();
+                        Log.d(TAG, "Rules loaded: " + currentRules.size());
+                    }
+                });
+    }
+
+    // ── Firebase installed apps listener ─────────────────────────
+    @SuppressWarnings("unchecked")
+    private void listenToInstalledApps() {
+        appsListener = db.collection("guardianshield").document("installed_apps")
+                .addSnapshotListener((snap, e) -> {
+                    if (e != null) return;
+                    if (snap != null && snap.exists()) {
+                        Map<String, Object> data = snap.getData();
+                        if (data == null) return;
+                        List<Map<String, Object>> list =
+                                (List<Map<String, Object>>) data.get("list");
+                        if (list == null) return;
+                        Map<String, String> newMap = new HashMap<>();
+                        for (Map<String, Object> app : list) {
+                            String pkg = (String) app.get("packageName");
+                            String id  = (String) app.get("id");
+                            if (pkg != null && id != null) newMap.put(pkg, id);
+                        }
+                        packageToAppId = newMap;
+                        Log.d(TAG, "Package map: " + packageToAppId.size() + " apps");
+                    }
+                });
+    }
+
+    // ── Called EVERY time a window/app changes ───────────────────
+    @Override
+    public void onAccessibilityEvent(AccessibilityEvent event) {
+        if (event.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return;
+
+        CharSequence pkgCs = event.getPackageName();
+        if (pkgCs == null) return;
+        String foregroundPkg = pkgCs.toString();
+
+        // Skip our own app
+        if (foregroundPkg.equals(getPackageName())) return;
+
+        Log.d(TAG, "App opened: " + foregroundPkg);
+
+        // Find appId for this package
+        String appId = packageToAppId.get(foregroundPkg);
+
+        // Fallback: try sanitized package name directly as appId
+        if (appId == null) {
+            String sanitized = foregroundPkg.replace(".", "_").replace("-", "_");
+            if (currentRules.containsKey(sanitized)) {
+                appId = sanitized;
             }
         }
+
+        if (appId == null) return;
+
+        // Get rule
+        Object ruleObj = currentRules.get(appId);
+        if (!(ruleObj instanceof Map)) return;
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> rule = (Map<String, Object>) ruleObj;
+
+        Boolean enabled = (Boolean) rule.get("enabled");
+        if (enabled == null || !enabled) return;
+
+        // Check time
+        if (!isAllowedNow(rule)) {
+            Log.d(TAG, "🚫 BLOCKING: " + foregroundPkg);
+            showBlockScreen(foregroundPkg, appId);
+        }
+    }
+
+    // ── Time/day check ───────────────────────────────────────────
+    @SuppressWarnings("unchecked")
+    private boolean isAllowedNow(Map<String, Object> rule) {
+        Calendar cal      = Calendar.getInstance();
+        String todayName  = DAY_NAMES[cal.get(Calendar.DAY_OF_WEEK) - 1];
+        int currentMins   = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE);
+
+        List<String> days = (List<String>) rule.get("days");
+        if (days == null || !days.contains(todayName)) return false;
+
+        List<Map<String, Object>> slots = (List<Map<String, Object>>) rule.get("slots");
+        if (slots == null || slots.isEmpty()) return false;
+
+        for (Map<String, Object> slot : slots) {
+            String from = (String) slot.get("from");
+            String to   = (String) slot.get("to");
+            if (from == null || to == null) continue;
+            if (currentMins >= timeToMins(from) && currentMins < timeToMins(to))
+                return true;
+        }
+        return false;
+    }
+
+    private int timeToMins(String t) {
+        try {
+            String[] p = t.split(":");
+            return Integer.parseInt(p[0]) * 60 + Integer.parseInt(p[1]);
+        } catch (Exception e) { return 0; }
+    }
+
+    // ── Launch block screen ───────────────────────────────────────
+    private void showBlockScreen(String pkg, String appId) {
+        Intent i = new Intent(this, BlockActivity.class);
+        i.putExtra("pkg",   pkg);
+        i.putExtra("appId", appId);
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        startActivity(i);
+    }
+
+    @Override
+    public void onInterrupt() {
+        Log.d(TAG, "AccessibilityService interrupted");
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        if (rulesListener != null) rulesListener.remove();
+        if (appsListener  != null) appsListener.remove();
     }
 }
