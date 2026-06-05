@@ -7,6 +7,7 @@ import android.graphics.Typeface;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.WindowManager;
+import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -14,7 +15,6 @@ import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FirebaseFirestore;
 
 import java.text.SimpleDateFormat;
-import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -26,19 +26,18 @@ public class BlockActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // Make it show over lock screen
         getWindow().addFlags(
                 WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
-                WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD |
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
                 WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
         );
 
-        String appId = getIntent().getStringExtra("appId");
-        buildBlockScreen(appId);
+        String appId  = getIntent().getStringExtra("appId");
+        String pkg    = getIntent().getStringExtra("pkg");
+        buildBlockScreen(appId, pkg);
     }
 
-    private void buildBlockScreen(String appId) {
+    private void buildBlockScreen(String appId, String pkg) {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.parseColor("#0f0c29"));
@@ -62,10 +61,13 @@ public class BlockActivity extends Activity {
         title.setPadding(0, 24, 0, 0);
         root.addView(title);
 
-        // App name
+        // App name — use appId as display name (readable enough)
         TextView appName = new TextView(this);
-        appName.setText(AppScanner.getDisplayNameForAppId(appId));
-        appName.setTextSize(18);
+        String displayName = appId != null
+                ? appId.replace("_", " ") // convert com_google_android_youtube → com google android youtube
+                : (pkg != null ? pkg : "This app");
+        appName.setText(displayName);
+        appName.setTextSize(16);
         appName.setTextColor(Color.parseColor("#a78bfa"));
         appName.setGravity(Gravity.CENTER);
         appName.setPadding(0, 8, 0, 0);
@@ -90,7 +92,7 @@ public class BlockActivity extends Activity {
         time.setPadding(0, 32, 0, 0);
         root.addView(time);
 
-        // Next allowed time - fetch from Firestore
+        // Next allowed time
         TextView nextAllowed = new TextView(this);
         nextAllowed.setText("Fetching schedule…");
         nextAllowed.setTextSize(13);
@@ -99,7 +101,7 @@ public class BlockActivity extends Activity {
         nextAllowed.setPadding(0, 8, 0, 0);
         root.addView(nextAllowed);
 
-        // Fetch schedule info
+        // Fetch schedule from Firebase
         if (appId != null) {
             FirebaseFirestore.getInstance()
                     .collection("guardianshield").document("rules")
@@ -111,7 +113,7 @@ public class BlockActivity extends Activity {
         }
 
         // Go Home button
-        android.widget.Button btnHome = new android.widget.Button(this);
+        Button btnHome = new Button(this);
         btnHome.setText("Go to Home Screen");
         btnHome.setTextColor(Color.WHITE);
         btnHome.setTextSize(16);
@@ -140,19 +142,19 @@ public class BlockActivity extends Activity {
         List<Map<String, Object>> slots = (List<Map<String, Object>>) rule.get("slots");
         if (slots == null || slots.isEmpty()) return "No time slots configured.";
 
-        StringBuilder sb = new StringBuilder("Allowed times today:\n");
+        StringBuilder sb = new StringBuilder("Allowed times:\n");
         for (Map<String, Object> slot : slots) {
             String from = (String) slot.get("from");
             String to   = (String) slot.get("to");
             if (from != null && to != null) {
-                sb.append("  • ").append(formatTime(from)).append(" – ").append(formatTime(to)).append("\n");
+                sb.append("  • ").append(formatTime(from))
+                  .append(" – ").append(formatTime(to)).append("\n");
             }
         }
         return sb.toString().trim();
     }
 
     private String formatTime(String t) {
-        // Convert "16:00" to "4:00 PM"
         try {
             String[] parts = t.split(":");
             int h = Integer.parseInt(parts[0]);
@@ -161,9 +163,7 @@ public class BlockActivity extends Activity {
             if (h > 12) h -= 12;
             if (h == 0) h = 12;
             return String.format(Locale.getDefault(), "%d:%02d %s", h, m, ampm);
-        } catch (Exception e) {
-            return t;
-        }
+        } catch (Exception e) { return t; }
     }
 
     private void goHome() {
@@ -175,7 +175,5 @@ public class BlockActivity extends Activity {
     }
 
     @Override
-    public void onBackPressed() {
-        goHome(); // Back button also goes home, not back to blocked app
-    }
+    public void onBackPressed() { goHome(); }
 }
