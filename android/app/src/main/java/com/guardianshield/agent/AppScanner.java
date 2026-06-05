@@ -3,6 +3,7 @@ package com.guardianshield.agent;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.os.Build;
 import android.util.Log;
 
 import com.google.firebase.firestore.FirebaseFirestore;
@@ -16,106 +17,15 @@ public class AppScanner {
 
     private static final String TAG = "AppScanner";
 
-    // Known app ID → package name mapping
-    private static final Map<String, String> APP_ID_TO_PACKAGE = new HashMap<>();
-    static {
-        APP_ID_TO_PACKAGE.put("youtube",   "com.google.android.youtube");
-        APP_ID_TO_PACKAGE.put("freefire",  "com.dts.freefireth");
-        APP_ID_TO_PACKAGE.put("pubg",      "com.pubg.imobile");
-        APP_ID_TO_PACKAGE.put("instagram", "com.instagram.android");
-        APP_ID_TO_PACKAGE.put("snapchat",  "com.snapchat.android");
-        APP_ID_TO_PACKAGE.put("facebook",  "com.facebook.katana");
-        APP_ID_TO_PACKAGE.put("tiktok",    "com.zhiliaoapp.musically");
-        APP_ID_TO_PACKAGE.put("whatsapp",  "com.whatsapp");
-        APP_ID_TO_PACKAGE.put("telegram",  "org.telegram.messenger");
-        APP_ID_TO_PACKAGE.put("chrome",    "com.android.chrome");
-        APP_ID_TO_PACKAGE.put("subway_surfers", "com.kiloo.subwaysurf");
-        APP_ID_TO_PACKAGE.put("clash_of_clans", "com.supercell.clashofclans");
-        APP_ID_TO_PACKAGE.put("roblox",    "com.roblox.client");
-        APP_ID_TO_PACKAGE.put("netflix",   "com.netflix.mediaclient");
+    // Get unique device ID (model + brand)
+    public static String getDeviceId() {
+        return (Build.BRAND + "_" + Build.MODEL)
+                .replace(" ", "_")
+                .replace("-", "_")
+                .toLowerCase();
     }
 
-    // Display names
-    private static final Map<String, String> APP_ID_TO_NAME = new HashMap<>();
-    static {
-        APP_ID_TO_NAME.put("youtube",   "YouTube");
-        APP_ID_TO_NAME.put("freefire",  "Free Fire");
-        APP_ID_TO_NAME.put("pubg",      "BGMI / PUBG");
-        APP_ID_TO_NAME.put("instagram", "Instagram");
-        APP_ID_TO_NAME.put("snapchat",  "Snapchat");
-        APP_ID_TO_NAME.put("facebook",  "Facebook");
-        APP_ID_TO_NAME.put("tiktok",    "TikTok");
-        APP_ID_TO_NAME.put("whatsapp",  "WhatsApp");
-        APP_ID_TO_NAME.put("telegram",  "Telegram");
-        APP_ID_TO_NAME.put("chrome",    "Chrome");
-        APP_ID_TO_NAME.put("subway_surfers", "Subway Surfers");
-        APP_ID_TO_NAME.put("clash_of_clans", "Clash of Clans");
-        APP_ID_TO_NAME.put("roblox",    "Roblox");
-        APP_ID_TO_NAME.put("netflix",   "Netflix");
-    }
-
-    public static String getPackageForAppId(String appId) {
-        return APP_ID_TO_PACKAGE.get(appId);
-    }
-
-    public static String getDisplayNameForAppId(String appId) {
-        return APP_ID_TO_NAME.getOrDefault(appId, appId);
-    }
-
-    /**
-     * Scans all installed apps and uploads to Firebase.
-     * This populates the web panel with her actual installed apps.
-     */
-    public static void uploadInstalledApps(Context context) {
-        new Thread(() -> {
-            try {
-                PackageManager pm = context.getPackageManager();
-                List<ApplicationInfo> apps = pm.getInstalledApplications(PackageManager.GET_META_DATA);
-
-                List<Map<String, Object>> appList = new ArrayList<>();
-
-                for (ApplicationInfo app : apps) {
-                    // Skip system apps
-                    if ((app.flags & ApplicationInfo.FLAG_SYSTEM) != 0) continue;
-
-                    String pkgName = app.packageName;
-                    String appName = pm.getApplicationLabel(app).toString();
-
-                    Map<String, Object> appData = new HashMap<>();
-                    appData.put("id",          sanitizeId(pkgName));
-                    appData.put("name",        appName);
-                    appData.put("packageName", pkgName);
-                    appData.put("icon",        getIconEmoji(pkgName));
-                    appData.put("color",       getColor(pkgName));
-                    appList.add(appData);
-
-                    // Also update the local mapping
-                    APP_ID_TO_PACKAGE.put(sanitizeId(pkgName), pkgName);
-                    APP_ID_TO_NAME.put(sanitizeId(pkgName), appName);
-                }
-
-                // Upload to Firebase
-                Map<String, Object> data = new HashMap<>();
-                data.put("list",      appList);
-                data.put("deviceId",  android.os.Build.MODEL);
-                data.put("updatedAt", System.currentTimeMillis());
-
-                FirebaseFirestore.getInstance()
-                        .collection("guardianshield").document("installed_apps")
-                        .set(data)
-                        .addOnSuccessListener(v -> Log.d(TAG, "Uploaded " + appList.size() + " apps"))
-                        .addOnFailureListener(e -> Log.e(TAG, "Upload failed", e));
-
-            } catch (Exception e) {
-                Log.e(TAG, "Scan error", e);
-            }
-        }).start();
-    }
-
-    private static String sanitizeId(String pkg) {
-        return pkg.replace(".", "_").replace("-", "_");
-    }
-
+    // Known package → emoji icon
     private static String getIconEmoji(String pkg) {
         if (pkg.contains("youtube"))   return "▶";
         if (pkg.contains("instagram")) return "📸";
@@ -131,9 +41,11 @@ public class AppScanner {
         if (pkg.contains("roblox"))    return "🎮";
         if (pkg.contains("clash"))     return "⚔";
         if (pkg.contains("subway"))    return "🏃";
+        if (pkg.contains("game") || pkg.contains("play")) return "🎮";
         return "📱";
     }
 
+    // Known package → color
     private static String getColor(String pkg) {
         if (pkg.contains("youtube"))   return "#FF0000";
         if (pkg.contains("instagram")) return "#C13584";
@@ -147,5 +59,102 @@ public class AppScanner {
         if (pkg.contains("pubg"))      return "#F5A623";
         if (pkg.contains("roblox"))    return "#E62020";
         return "#7C3AED";
+    }
+
+    private static String sanitizeId(String pkg) {
+        return pkg.replace(".", "_").replace("-", "_");
+    }
+
+    /**
+     * Scans all installed apps and uploads to Firebase
+     * under device-specific path: devices/{deviceId}/installed_apps
+     * Also registers this device in the devices list.
+     */
+    public static void uploadInstalledApps(Context context) {
+        new Thread(() -> {
+            try {
+                PackageManager pm = context.getPackageManager();
+                List<ApplicationInfo> apps = pm.getInstalledApplications(PackageManager.GET_META_DATA);
+                String deviceId = getDeviceId();
+
+                List<Map<String, Object>> appList = new ArrayList<>();
+
+                // Packages to always skip (core Android system, not useful to block)
+                List<String> skipPrefixes = new ArrayList<>();
+                skipPrefixes.add("com.android.internal");
+                skipPrefixes.add("com.android.providers");
+                skipPrefixes.add("com.android.server");
+                skipPrefixes.add("com.qualcomm");
+                skipPrefixes.add("com.mediatek");
+                skipPrefixes.add("com.guardianshield"); // skip ourselves
+
+                for (ApplicationInfo app : apps) {
+                    String pkgName = app.packageName;
+
+                    // Skip pure system internals but KEEP user-facing apps
+                    // even if preinstalled (like YouTube, Chrome, etc.)
+                    boolean isSystemInternal =
+                            (app.flags & ApplicationInfo.FLAG_SYSTEM) != 0 &&
+                            pm.getLaunchIntentForPackage(pkgName) == null;
+                    if (isSystemInternal) continue;
+
+                    // Skip known useless system packages
+                    boolean shouldSkip = false;
+                    for (String prefix : skipPrefixes) {
+                        if (pkgName.startsWith(prefix)) { shouldSkip = true; break; }
+                    }
+                    if (shouldSkip) continue;
+
+                    String appName = pm.getApplicationLabel(app).toString();
+
+                    Map<String, Object> appData = new HashMap<>();
+                    appData.put("id",          sanitizeId(pkgName));
+                    appData.put("name",        appName);
+                    appData.put("packageName", pkgName);
+                    appData.put("icon",        getIconEmoji(pkgName));
+                    appData.put("color",       getColor(pkgName));
+                    appList.add(appData);
+                }
+
+                FirebaseFirestore db = FirebaseFirestore.getInstance();
+
+                // 1. Upload apps under this device's own document
+                Map<String, Object> deviceApps = new HashMap<>();
+                deviceApps.put("list",      appList);
+                deviceApps.put("deviceId",  deviceId);
+                deviceApps.put("model",     Build.MODEL);
+                deviceApps.put("brand",     Build.BRAND);
+                deviceApps.put("updatedAt", System.currentTimeMillis());
+
+                db.collection("guardianshield")
+                        .document("device_" + deviceId)
+                        .set(deviceApps)
+                        .addOnSuccessListener(v ->
+                                Log.d(TAG, "✅ Uploaded " + appList.size() + " apps for device: " + deviceId))
+                        .addOnFailureListener(e ->
+                                Log.e(TAG, "❌ Upload failed", e));
+
+                // 2. Also register this device in the devices registry
+                Map<String, Object> deviceInfo = new HashMap<>();
+                deviceInfo.put("deviceId",  deviceId);
+                deviceInfo.put("model",     Build.MODEL);
+                deviceInfo.put("brand",     Build.BRAND);
+                deviceInfo.put("lastSeen",  System.currentTimeMillis());
+                deviceInfo.put("appCount",  appList.size());
+
+                db.collection("guardianshield")
+                        .document("devices")
+                        .collection("list")
+                        .document(deviceId)
+                        .set(deviceInfo)
+                        .addOnSuccessListener(v ->
+                                Log.d(TAG, "✅ Device registered: " + deviceId))
+                        .addOnFailureListener(e ->
+                                Log.e(TAG, "❌ Device register failed", e));
+
+            } catch (Exception e) {
+                Log.e(TAG, "Scan error", e);
+            }
+        }).start();
     }
 }
