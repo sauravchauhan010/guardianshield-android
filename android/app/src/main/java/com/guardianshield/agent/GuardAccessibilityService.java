@@ -18,12 +18,14 @@ public class GuardAccessibilityService extends AccessibilityService {
 
     private static final String TAG = "GuardAccess";
 
-    private FirebaseFirestore db;
+    private FirebaseFirestore    db;
     private ListenerRegistration rulesListener;
     private ListenerRegistration appsListener;
 
-    private Map<String, Object> currentRules  = new HashMap<>();
+    private Map<String, Object> currentRules   = new HashMap<>();
     private Map<String, String> packageToAppId = new HashMap<>();
+
+    private String deviceId;
 
     private static final String[] DAY_NAMES = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
 
@@ -32,22 +34,23 @@ public class GuardAccessibilityService extends AccessibilityService {
         super.onServiceConnected();
         Log.d(TAG, "✅ AccessibilityService connected!");
 
-        // Configure to receive window state changes
         AccessibilityServiceInfo info = new AccessibilityServiceInfo();
-        info.eventTypes  = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED;
-        info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC;
-        info.flags       = AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS;
+        info.eventTypes       = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED;
+        info.feedbackType     = AccessibilityServiceInfo.FEEDBACK_GENERIC;
+        info.flags            = AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS;
         info.notificationTimeout = 100;
         setServiceInfo(info);
 
-        db = FirebaseFirestore.getInstance();
+        deviceId = AppScanner.getDeviceId(this);
+        db       = FirebaseFirestore.getInstance();
         listenToRules();
         listenToInstalledApps();
     }
 
-    // ── Firebase rules listener ──────────────────────────────────
+    // ── Rules scoped to THIS device ──────────────────────────────
     private void listenToRules() {
-        rulesListener = db.collection("guardianshield").document("rules")
+        rulesListener = db.collection("guardianshield")
+                .document("rules_" + deviceId)
                 .addSnapshotListener((snap, e) -> {
                     if (e != null) return;
                     if (snap != null && snap.exists()) {
@@ -57,10 +60,11 @@ public class GuardAccessibilityService extends AccessibilityService {
                 });
     }
 
-    // ── Firebase installed apps listener ─────────────────────────
+    // ── Apps for THIS device ─────────────────────────────────────
     @SuppressWarnings("unchecked")
     private void listenToInstalledApps() {
-        appsListener = db.collection("guardianshield").document("installed_apps")
+        appsListener = db.collection("guardianshield")
+                .document("device_" + deviceId)
                 .addSnapshotListener((snap, e) -> {
                     if (e != null) return;
                     if (snap != null && snap.exists()) {
@@ -81,7 +85,7 @@ public class GuardAccessibilityService extends AccessibilityService {
                 });
     }
 
-    // ── Called EVERY time a window/app changes ───────────────────
+    // ── Called every time a window/app changes ───────────────────
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event.getEventType() != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return;
@@ -90,25 +94,17 @@ public class GuardAccessibilityService extends AccessibilityService {
         if (pkgCs == null) return;
         String foregroundPkg = pkgCs.toString();
 
-        // Skip our own app
         if (foregroundPkg.equals(getPackageName())) return;
 
-        Log.d(TAG, "App opened: " + foregroundPkg);
-
-        // Find appId for this package
         String appId = packageToAppId.get(foregroundPkg);
 
         // Fallback: try sanitized package name directly as appId
         if (appId == null) {
             String sanitized = foregroundPkg.replace(".", "_").replace("-", "_");
-            if (currentRules.containsKey(sanitized)) {
-                appId = sanitized;
-            }
+            if (currentRules.containsKey(sanitized)) appId = sanitized;
         }
-
         if (appId == null) return;
 
-        // Get rule
         Object ruleObj = currentRules.get(appId);
         if (!(ruleObj instanceof Map)) return;
 
@@ -118,7 +114,6 @@ public class GuardAccessibilityService extends AccessibilityService {
         Boolean enabled = (Boolean) rule.get("enabled");
         if (enabled == null || !enabled) return;
 
-        // Check time
         if (!isAllowedNow(rule)) {
             Log.d(TAG, "🚫 BLOCKING: " + foregroundPkg);
             showBlockScreen(foregroundPkg, appId);
@@ -128,9 +123,9 @@ public class GuardAccessibilityService extends AccessibilityService {
     // ── Time/day check ───────────────────────────────────────────
     @SuppressWarnings("unchecked")
     private boolean isAllowedNow(Map<String, Object> rule) {
-        Calendar cal      = Calendar.getInstance();
-        String todayName  = DAY_NAMES[cal.get(Calendar.DAY_OF_WEEK) - 1];
-        int currentMins   = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE);
+        Calendar cal        = Calendar.getInstance();
+        String   todayName  = DAY_NAMES[cal.get(Calendar.DAY_OF_WEEK) - 1];
+        int      currentMins = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE);
 
         List<String> days = (List<String>) rule.get("days");
         if (days == null || !days.contains(todayName)) return false;
@@ -142,32 +137,28 @@ public class GuardAccessibilityService extends AccessibilityService {
             String from = (String) slot.get("from");
             String to   = (String) slot.get("to");
             if (from == null || to == null) continue;
-            if (currentMins >= timeToMins(from) && currentMins < timeToMins(to))
-                return true;
+            try {
+                if (currentMins >= timeToMins(from) && currentMins < timeToMins(to)) return true;
+            } catch (Exception ignored) {}
         }
         return false;
     }
 
     private int timeToMins(String t) {
-        try {
-            String[] p = t.split(":");
-            return Integer.parseInt(p[0]) * 60 + Integer.parseInt(p[1]);
-        } catch (Exception e) { return 0; }
+        String[] p = t.split(":");
+        return Integer.parseInt(p[0]) * 60 + Integer.parseInt(p[1]);
     }
 
-    // ── Launch block screen ───────────────────────────────────────
     private void showBlockScreen(String pkg, String appId) {
         Intent i = new Intent(this, BlockActivity.class);
-        i.putExtra("pkg",   pkg);
-        i.putExtra("appId", appId);
+        i.putExtra("pkg",      pkg);
+        i.putExtra("appId",    appId);
+        i.putExtra("deviceId", deviceId);
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         startActivity(i);
     }
 
-    @Override
-    public void onInterrupt() {
-        Log.d(TAG, "AccessibilityService interrupted");
-    }
+    @Override public void onInterrupt() { Log.d(TAG, "AccessibilityService interrupted"); }
 
     @Override
     public void onDestroy() {
