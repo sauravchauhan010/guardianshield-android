@@ -27,39 +27,44 @@ import java.util.TreeMap;
 
 public class GuardService extends Service {
 
-    private static final String TAG = "GuardService";
-    private static final String CHANNEL_ID = "gs_service";
-    private static final int CHECK_INTERVAL_MS = 3000;
+    private static final String TAG              = "GuardService";
+    private static final String CHANNEL_ID       = "gs_service";
+    private static final int    CHECK_INTERVAL_MS = 3000;
 
-    private Handler handler;
+    private Handler  handler;
     private Runnable checkRunnable;
     private FirebaseFirestore db;
     private ListenerRegistration rulesListener;
     private ListenerRegistration appsListener;
 
-    // rules: appId -> schedule map
-    private Map<String, Object> currentRules = new HashMap<>();
-    // packageName -> appId  (built from installed_apps list)
+    // rules: appId -> schedule map  (scoped to THIS device)
+    private Map<String, Object> currentRules  = new HashMap<>();
+    // packageName -> appId  (built from this device's installed_apps)
     private Map<String, String> packageToAppId = new HashMap<>();
 
-    private static final String[] DAY_NAMES = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    private String deviceId;
+
+    private static final String[] DAY_NAMES = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
 
     @Override
     public void onCreate() {
         super.onCreate();
-        db = FirebaseFirestore.getInstance();
-        handler = new Handler(Looper.getMainLooper());
+        deviceId = AppScanner.getDeviceId(this);
+        db       = FirebaseFirestore.getInstance();
+        handler  = new Handler(Looper.getMainLooper());
         createNotificationChannel();
         startForeground(1, buildNotification());
         listenToFirebaseRules();
         listenToInstalledApps();
         startMonitoring();
-        Log.d(TAG, "GuardService started");
+        Log.d(TAG, "GuardService started for device: " + deviceId);
     }
 
-    // ── Listen to rules ──────────────────────────────────────────
+    // ── Listen to rules scoped to THIS device ────────────────────
     private void listenToFirebaseRules() {
-        rulesListener = db.collection("guardianshield").document("rules")
+        // Path: guardianshield/rules_{deviceId}
+        rulesListener = db.collection("guardianshield")
+                .document("rules_" + deviceId)
                 .addSnapshotListener((snap, e) -> {
                     if (e != null) { Log.e(TAG, "Rules error", e); return; }
                     if (snap != null && snap.exists()) {
@@ -69,10 +74,12 @@ public class GuardService extends Service {
                 });
     }
 
-    // ── Listen to installed apps to build package->appId map ─────
+    // ── Listen to THIS device's installed apps ───────────────────
     @SuppressWarnings("unchecked")
     private void listenToInstalledApps() {
-        appsListener = db.collection("guardianshield").document("installed_apps")
+        // Path: guardianshield/device_{deviceId}
+        appsListener = db.collection("guardianshield")
+                .document("device_" + deviceId)
                 .addSnapshotListener((snap, e) -> {
                     if (e != null) { Log.e(TAG, "Apps error", e); return; }
                     if (snap != null && snap.exists()) {
@@ -85,9 +92,7 @@ public class GuardService extends Service {
                         for (Map<String, Object> app : list) {
                             String pkg = (String) app.get("packageName");
                             String id  = (String) app.get("id");
-                            if (pkg != null && id != null) {
-                                newMap.put(pkg, id);
-                            }
+                            if (pkg != null && id != null) newMap.put(pkg, id);
                         }
                         packageToAppId = newMap;
                         Log.d(TAG, "Package map updated: " + packageToAppId.size() + " apps");
@@ -98,8 +103,7 @@ public class GuardService extends Service {
     // ── Monitoring loop ──────────────────────────────────────────
     private void startMonitoring() {
         checkRunnable = new Runnable() {
-            @Override
-            public void run() {
+            @Override public void run() {
                 checkForegroundApp();
                 handler.postDelayed(this, CHECK_INTERVAL_MS);
             }
@@ -112,11 +116,9 @@ public class GuardService extends Service {
         String foregroundPkg = getForegroundApp();
         if (foregroundPkg == null || foregroundPkg.equals(getPackageName())) return;
 
-        // Get the appId for this package
         String appId = packageToAppId.get(foregroundPkg);
-        if (appId == null) return; // Not in our app list
+        if (appId == null) return;
 
-        // Check if there's a rule for this appId
         Object ruleObj = currentRules.get(appId);
         if (!(ruleObj instanceof Map)) return;
 
@@ -126,7 +128,6 @@ public class GuardService extends Service {
         Boolean enabled = (Boolean) rule.get("enabled");
         if (enabled == null || !enabled) return;
 
-        // Check if current time is allowed
         if (!isAllowedNow(rule)) {
             Log.d(TAG, "BLOCKING: " + foregroundPkg + " (appId: " + appId + ")");
             blockApp(foregroundPkg, appId);
@@ -136,17 +137,13 @@ public class GuardService extends Service {
     // ── Time/day check ───────────────────────────────────────────
     @SuppressWarnings("unchecked")
     private boolean isAllowedNow(Map<String, Object> rule) {
-        Calendar cal = Calendar.getInstance();
-        int dayOfWeek = cal.get(Calendar.DAY_OF_WEEK); // 1=Sun
-        String todayName = DAY_NAMES[dayOfWeek - 1];
+        Calendar cal        = Calendar.getInstance();
+        String   todayName  = DAY_NAMES[cal.get(Calendar.DAY_OF_WEEK) - 1];
+        int      currentMins = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE);
 
-        int currentMins = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE);
-
-        // Check allowed days
         List<String> days = (List<String>) rule.get("days");
         if (days == null || !days.contains(todayName)) return false;
 
-        // Check time slots
         List<Map<String, Object>> slots = (List<Map<String, Object>>) rule.get("slots");
         if (slots == null || slots.isEmpty()) return false;
 
@@ -154,9 +151,7 @@ public class GuardService extends Service {
             String from = (String) slot.get("from");
             String to   = (String) slot.get("to");
             if (from == null || to == null) continue;
-            if (currentMins >= timeToMins(from) && currentMins < timeToMins(to)) {
-                return true;
-            }
+            if (currentMins >= timeToMins(from) && currentMins < timeToMins(to)) return true;
         }
         return false;
     }
@@ -169,7 +164,7 @@ public class GuardService extends Service {
     // ── Show block screen ────────────────────────────────────────
     private void blockApp(String packageName, String appId) {
         Intent intent = new Intent(this, BlockActivity.class);
-        intent.putExtra("pkg", packageName);
+        intent.putExtra("pkg",   packageName);
         intent.putExtra("appId", appId);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                 | Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -180,22 +175,15 @@ public class GuardService extends Service {
     // ── Get foreground app ───────────────────────────────────────
     private String getForegroundApp() {
         try {
-            UsageStatsManager usm = (UsageStatsManager)
-                    getSystemService(Context.USAGE_STATS_SERVICE);
+            UsageStatsManager usm = (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
             long now = System.currentTimeMillis();
             SortedMap<Long, UsageStats> sortedMap = new TreeMap<>();
             List<UsageStats> stats = usm.queryUsageStats(
                     UsageStatsManager.INTERVAL_DAILY, now - 10000, now);
             if (stats == null || stats.isEmpty()) return null;
-            for (UsageStats us : stats) {
-                sortedMap.put(us.getLastTimeUsed(), us);
-            }
-            if (!sortedMap.isEmpty()) {
-                return sortedMap.get(sortedMap.lastKey()).getPackageName();
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "getForegroundApp error", e);
-        }
+            for (UsageStats us : stats) sortedMap.put(us.getLastTimeUsed(), us);
+            if (!sortedMap.isEmpty()) return sortedMap.get(sortedMap.lastKey()).getPackageName();
+        } catch (Exception e) { Log.e(TAG, "getForegroundApp error", e); }
         return null;
     }
 
@@ -217,10 +205,7 @@ public class GuardService extends Service {
                 .build();
     }
 
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-        return START_STICKY;
-    }
+    @Override public int onStartCommand(Intent intent, int flags, int startId) { return START_STICKY; }
 
     @Override
     public void onDestroy() {
@@ -228,9 +213,8 @@ public class GuardService extends Service {
         if (handler != null && checkRunnable != null) handler.removeCallbacks(checkRunnable);
         if (rulesListener != null) rulesListener.remove();
         if (appsListener  != null) appsListener.remove();
-        startService(new Intent(this, GuardService.class)); // restart self
+        startService(new Intent(this, GuardService.class));
     }
 
-    @Override
-    public IBinder onBind(Intent intent) { return null; }
+    @Override public IBinder onBind(Intent intent) { return null; }
 }
