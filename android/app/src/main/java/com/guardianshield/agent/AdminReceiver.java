@@ -16,7 +16,6 @@ public class AdminReceiver extends DeviceAdminReceiver {
 
     @Override
     public CharSequence onDisableRequested(Context context, Intent intent) {
-        // Someone is trying to disable Device Admin - send tamper alert!
         sendTamperAlert(context, "DISABLE_REQUESTED");
         Log.w(TAG, "Device admin disable requested!");
         return "⚠ GuardianShield protection will be removed. Your guardian will be notified.";
@@ -24,7 +23,6 @@ public class AdminReceiver extends DeviceAdminReceiver {
 
     @Override
     public void onDisabled(Context context, Intent intent) {
-        // Device admin was disabled - send critical alert!
         sendTamperAlert(context, "ADMIN_DISABLED");
         Log.w(TAG, "Device admin DISABLED!");
     }
@@ -37,15 +35,22 @@ public class AdminReceiver extends DeviceAdminReceiver {
 
     private void sendTamperAlert(Context context, String type) {
         try {
-            Map<String, Object> alert = new HashMap<>();
-            alert.put("type",      type);
-            alert.put("timestamp", System.currentTimeMillis());
-            alert.put("device",    android.os.Build.MODEL);
-            alert.put("resolved",  false);
-            alert.put("message",   getTamperMessage(type));
+            String deviceId    = AppScanner.getDeviceId(context);
+            String deviceLabel = AppScanner.getDeviceLabel();
 
+            Map<String, Object> alert = new HashMap<>();
+            alert.put("type",        type);
+            alert.put("timestamp",   System.currentTimeMillis());
+            alert.put("device",      android.os.Build.MODEL);
+            alert.put("deviceId",    deviceId);
+            alert.put("deviceLabel", deviceLabel);
+            alert.put("resolved",    false);
+            alert.put("message",     getTamperMessage(type, deviceLabel));
+
+            // Store tamper alert scoped to this device: tamper_{deviceId}
             FirebaseFirestore.getInstance()
-                    .collection("guardianshield").document("tamper_alert")
+                    .collection("guardianshield")
+                    .document("tamper_" + deviceId)
                     .set(alert)
                     .addOnSuccessListener(v -> Log.d(TAG, "Tamper alert sent: " + type))
                     .addOnFailureListener(e -> Log.e(TAG, "Failed to send alert", e));
@@ -55,21 +60,29 @@ public class AdminReceiver extends DeviceAdminReceiver {
     }
 
     private void sendStatusUpdate(Context context, String status) {
+        String deviceId = AppScanner.getDeviceId(context);
         Map<String, Object> data = new HashMap<>();
-        data.put("status",    status);
-        data.put("timestamp", System.currentTimeMillis());
-        data.put("device",    android.os.Build.MODEL);
+        data.put("status",      status);
+        data.put("timestamp",   System.currentTimeMillis());
+        data.put("device",      android.os.Build.MODEL);
+        data.put("deviceId",    deviceId);
 
         FirebaseFirestore.getInstance()
-                .collection("guardianshield").document("device_status")
-                .set(data);
+                .collection("guardianshield")
+                .document("devices")
+                .collection("list")
+                .document(deviceId)
+                .update("status", status, "lastSeen", System.currentTimeMillis());
     }
 
-    private String getTamperMessage(String type) {
+    private String getTamperMessage(String type, String deviceLabel) {
         switch (type) {
-            case "DISABLE_REQUESTED": return "Someone tried to disable Device Admin on the phone!";
-            case "ADMIN_DISABLED":    return "Device Admin was disabled. App can now be uninstalled!";
-            default: return "Unknown tamper event: " + type;
+            case "DISABLE_REQUESTED":
+                return "Someone tried to disable Device Admin on " + deviceLabel + "!";
+            case "ADMIN_DISABLED":
+                return "Device Admin was disabled on " + deviceLabel + ". App can now be uninstalled!";
+            default:
+                return "Unknown tamper event on " + deviceLabel + ": " + type;
         }
     }
 }
