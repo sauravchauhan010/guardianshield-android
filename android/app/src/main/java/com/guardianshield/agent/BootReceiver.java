@@ -7,9 +7,9 @@ import android.util.Log;
 
 import com.google.firebase.firestore.FirebaseFirestore;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.ArrayList;
 
 public class BootReceiver extends BroadcastReceiver {
 
@@ -22,7 +22,6 @@ public class BootReceiver extends BroadcastReceiver {
 
         switch (action) {
 
-            // ── Phone rebooted → start service + rescan all apps ──
             case Intent.ACTION_BOOT_COMPLETED:
             case "android.intent.action.QUICKBOOT_POWERON":
                 Log.d(TAG, "Boot detected → starting service");
@@ -30,20 +29,17 @@ public class BootReceiver extends BroadcastReceiver {
                 AppScanner.uploadInstalledApps(context);
                 break;
 
-            // ── New app installed → add to Firebase list ──────────
             case Intent.ACTION_PACKAGE_ADDED: {
                 String pkg = getPackage(intent);
                 if (pkg != null && !pkg.equals(context.getPackageName())) {
                     Log.d(TAG, "App installed: " + pkg);
-                    AppScanner.uploadInstalledApps(context); // rescan full list
+                    AppScanner.uploadInstalledApps(context);
                 }
                 break;
             }
 
-            // ── App uninstalled → remove from Firebase list ───────
             case Intent.ACTION_PACKAGE_REMOVED:
             case Intent.ACTION_PACKAGE_FULLY_REMOVED: {
-                // Make sure it's not a replacement (update)
                 boolean isReplacing = intent.getBooleanExtra(Intent.EXTRA_REPLACING, false);
                 if (!isReplacing) {
                     String pkg = getPackage(intent);
@@ -55,10 +51,8 @@ public class BootReceiver extends BroadcastReceiver {
                 break;
             }
 
-            // ── App updated → refresh list ─────────────────────────
             case Intent.ACTION_PACKAGE_REPLACED: {
-                String pkg = getPackage(intent);
-                Log.d(TAG, "App updated: " + pkg);
+                Log.d(TAG, "App updated: " + getPackage(intent));
                 AppScanner.uploadInstalledApps(context);
                 break;
             }
@@ -70,10 +64,10 @@ public class BootReceiver extends BroadcastReceiver {
         return intent.getData().getSchemeSpecificPart();
     }
 
-    // ── Remove single app from Firebase installed_apps list ───────
+    // Remove a single app from this device's installed_apps doc
     @SuppressWarnings("unchecked")
     private void removeAppFromFirebase(Context context, String packageName) {
-        String deviceId = AppScanner.getDeviceId();
+        String deviceId = AppScanner.getDeviceId(context);
         FirebaseFirestore db = FirebaseFirestore.getInstance();
 
         db.collection("guardianshield")
@@ -85,16 +79,12 @@ public class BootReceiver extends BroadcastReceiver {
                             (List<Map<String, Object>>) snap.get("list");
                     if (list == null) return;
 
-                    // Remove the uninstalled app from list
                     List<Map<String, Object>> updated = new ArrayList<>();
                     for (Map<String, Object> app : list) {
                         String pkg = (String) app.get("packageName");
-                        if (!packageName.equals(pkg)) {
-                            updated.add(app); // keep it
-                        }
+                        if (!packageName.equals(pkg)) updated.add(app);
                     }
 
-                    // Save updated list back to Firebase
                     snap.getReference().update("list", updated)
                             .addOnSuccessListener(v ->
                                     Log.d(TAG, "✅ Removed " + packageName + " from Firebase"))
