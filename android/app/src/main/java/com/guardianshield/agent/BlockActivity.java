@@ -27,17 +27,21 @@ public class BlockActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         getWindow().addFlags(
-                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON  |
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
                 WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
         );
 
-        String appId  = getIntent().getStringExtra("appId");
-        String pkg    = getIntent().getStringExtra("pkg");
-        buildBlockScreen(appId, pkg);
+        String appId    = getIntent().getStringExtra("appId");
+        String pkg      = getIntent().getStringExtra("pkg");
+        // deviceId passed in by the service so we query the right rules doc
+        String deviceId = getIntent().getStringExtra("deviceId");
+        if (deviceId == null) deviceId = AppScanner.getDeviceId(this);
+
+        buildBlockScreen(appId, pkg, deviceId);
     }
 
-    private void buildBlockScreen(String appId, String pkg) {
+    private void buildBlockScreen(String appId, String pkg, String deviceId) {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.parseColor("#0f0c29"));
@@ -61,10 +65,10 @@ public class BlockActivity extends Activity {
         title.setPadding(0, 24, 0, 0);
         root.addView(title);
 
-        // App name — use appId as display name (readable enough)
+        // App name
         TextView appName = new TextView(this);
         String displayName = appId != null
-                ? appId.replace("_", " ") // convert com_google_android_youtube → com google android youtube
+                ? appId.replace("_", " ")
                 : (pkg != null ? pkg : "This app");
         appName.setText(displayName);
         appName.setTextSize(16);
@@ -92,7 +96,7 @@ public class BlockActivity extends Activity {
         time.setPadding(0, 32, 0, 0);
         root.addView(time);
 
-        // Next allowed time
+        // Next allowed time (fetched from this device's rules doc)
         TextView nextAllowed = new TextView(this);
         nextAllowed.setText("Fetching schedule…");
         nextAllowed.setTextSize(13);
@@ -101,10 +105,11 @@ public class BlockActivity extends Activity {
         nextAllowed.setPadding(0, 8, 0, 0);
         root.addView(nextAllowed);
 
-        // Fetch schedule from Firebase
         if (appId != null) {
+            final String finalDeviceId = deviceId;
             FirebaseFirestore.getInstance()
-                    .collection("guardianshield").document("rules")
+                    .collection("guardianshield")
+                    .document("rules_" + finalDeviceId)
                     .get()
                     .addOnSuccessListener(snap -> {
                         String info = getNextAllowedText(snap, appId);
@@ -174,6 +179,5 @@ public class BlockActivity extends Activity {
         finish();
     }
 
-    @Override
-    public void onBackPressed() { goHome(); }
+    @Override public void onBackPressed() { goHome(); }
 }
