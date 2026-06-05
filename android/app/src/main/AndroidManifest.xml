@@ -51,7 +51,7 @@
             android:excludeFromRecents="true"
             android:launchMode="singleInstance" />
 
-        <!-- OLD background service (kept as fallback) -->
+        <!-- Background service (fallback) -->
         <service
             android:name=".GuardService"
             android:exported="false"
@@ -61,7 +61,7 @@
                 android:value="monitoringApps"/>
         </service>
 
-        <!-- NEW Accessibility Service (cannot be killed by OS) -->
+        <!-- Accessibility Service (main blocker - cannot be killed) -->
         <service
             android:name=".GuardAccessibilityService"
             android:exported="true"
@@ -75,14 +75,21 @@
                 android:resource="@xml/accessibility_service" />
         </service>
 
-        <!-- Boot receiver -->
+        <!-- Boot + Package change receiver -->
         <receiver
             android:name=".BootReceiver"
             android:exported="true"
             android:enabled="true">
             <intent-filter android:priority="999">
+                <!-- Boot events -->
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <!-- App install/uninstall events -->
+                <action android:name="android.intent.action.PACKAGE_ADDED" />
+                <action android:name="android.intent.action.PACKAGE_REMOVED" />
+                <action android:name="android.intent.action.PACKAGE_FULLY_REMOVED" />
+                <action android:name="android.intent.action.PACKAGE_REPLACED" />
+                <data android:scheme="package" />
             </intent-filter>
         </receiver>
 
