@@ -33,7 +33,12 @@ public class AdminReceiver extends DeviceAdminReceiver {
         sendStatusUpdate(context, "ADMIN_ENABLED");
     }
 
+    // ── Send tamper alert, keeping the receiver alive until the
+    //    Firestore write actually completes (success OR failure) ──
     private void sendTamperAlert(Context context, String type) {
+        // goAsync() tells Android "don't kill me yet, async work pending"
+        final PendingResult pendingResult = goAsync();
+
         try {
             String deviceId    = AppScanner.getDeviceId(context);
             String deviceLabel = AppScanner.getDeviceLabel();
@@ -47,32 +52,56 @@ public class AdminReceiver extends DeviceAdminReceiver {
             alert.put("resolved",    false);
             alert.put("message",     getTamperMessage(type, deviceLabel));
 
-            // Store tamper alert scoped to this device: tamper_{deviceId}
             FirebaseFirestore.getInstance()
                     .collection("guardianshield")
                     .document("tamper_" + deviceId)
                     .set(alert)
-                    .addOnSuccessListener(v -> Log.d(TAG, "Tamper alert sent: " + type))
-                    .addOnFailureListener(e -> Log.e(TAG, "Failed to send alert", e));
+                    .addOnSuccessListener(v -> {
+                        Log.d(TAG, "✅ Tamper alert sent: " + type);
+                        pendingResult.finish(); // release the receiver now
+                    })
+                    .addOnFailureListener(e -> {
+                        Log.e(TAG, "❌ Failed to send alert", e);
+                        pendingResult.finish(); // release even on failure
+                    });
+
         } catch (Exception e) {
             Log.e(TAG, "sendTamperAlert error", e);
+            pendingResult.finish(); // always release, even on exception
         }
     }
 
+    // ── Same goAsync() pattern for the status update write ──────
     private void sendStatusUpdate(Context context, String status) {
-        String deviceId = AppScanner.getDeviceId(context);
-        Map<String, Object> data = new HashMap<>();
-        data.put("status",      status);
-        data.put("timestamp",   System.currentTimeMillis());
-        data.put("device",      android.os.Build.MODEL);
-        data.put("deviceId",    deviceId);
+        final PendingResult pendingResult = goAsync();
 
-        FirebaseFirestore.getInstance()
-                .collection("guardianshield")
-                .document("devices")
-                .collection("list")
-                .document(deviceId)
-                .update("status", status, "lastSeen", System.currentTimeMillis());
+        try {
+            String deviceId = AppScanner.getDeviceId(context);
+            Map<String, Object> data = new HashMap<>();
+            data.put("status",    status);
+            data.put("timestamp", System.currentTimeMillis());
+            data.put("device",    android.os.Build.MODEL);
+            data.put("deviceId",  deviceId);
+
+            FirebaseFirestore.getInstance()
+                    .collection("guardianshield")
+                    .document("devices")
+                    .collection("list")
+                    .document(deviceId)
+                    .update("status", status, "lastSeen", System.currentTimeMillis())
+                    .addOnSuccessListener(v -> {
+                        Log.d(TAG, "✅ Status update sent: " + status);
+                        pendingResult.finish();
+                    })
+                    .addOnFailureListener(e -> {
+                        Log.e(TAG, "❌ Status update failed", e);
+                        pendingResult.finish();
+                    });
+
+        } catch (Exception e) {
+            Log.e(TAG, "sendStatusUpdate error", e);
+            pendingResult.finish();
+        }
     }
 
     private String getTamperMessage(String type, String deviceLabel) {
